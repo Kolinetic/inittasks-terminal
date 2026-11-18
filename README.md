@@ -11,8 +11,7 @@ There is also **`itui`**, a full-screen terminal UI (see [TUI](#tui) below).
 
 ```sh
 git clone https://github.com/Kolinetic/inittasks-terminal.git
-cd inittasks-terminal && ./install.sh
-it login            # paste your itk_… token
+cd inittasks-terminal && ./install.sh   # first install asks for your api key
 ```
 
 `install.sh` makes `.venv` (with `uv` if present, else `python3 -m venv`), installs Textual for the TUI,
@@ -26,7 +25,7 @@ After a `git pull`, rerun it only if `requirements.txt` changed.
 ```powershell
 uv venv .venv
 uv pip install --python .venv/Scripts/python.exe -r requirements.txt
-.venv\Scripts\python.exe it.py login
+.venv\Scripts\python.exe it.py login   # or just run it: the first run asks for your key
 .venv\Scripts\python.exe itui.py
 ```
 
@@ -34,7 +33,13 @@ Put small `it.cmd` / `itui.cmd` shims on your PATH if you want the short names.
 
 ### Token
 
-`it login` (or `it login -f token.txt`) saves it to `~/.config/inittasks/config.json`, along with the TUI's theme.
+The first time you run `it`, `itui` or `install.sh` without a key, a short setup asks for one: create a
+personal access token in init.Tasks under **settings → api keys** (read + write for todos, containers and
+inbox; read for tags and profiles), paste it, and it's checked against the API before it's saved. It warns
+if the key is missing any of those scopes. Run `it login` any time to replace the key.
+
+`it login` (or `it login KEY`, `it login -f token.txt` for scripts) saves it to `~/.config/inittasks/config.json`
+(mode 600), along with the TUI's theme.
 `INITTASKS_TOKEN` overrides it. Tokens are personal access tokens (`itk_…`) made in the app; the token is never
 stored in this repo, so log in once on each machine.
 

@@ -1460,11 +1460,17 @@ class InitTasks(App):
 
 
 def main():
-    try:
-        core.get_token()
-    except core.CliError as e:
-        print(f"error: {e}")
-        raise SystemExit(1)
+    if not core.has_token():
+        if not core.interactive():
+            print("error: no API key yet. Run `it login` in a terminal (or set INITTASKS_TOKEN).")
+            raise SystemExit(1)
+        try:
+            ok = core.setup_wizard()
+        except core.CliError as e:
+            print(f"error: {e}")
+            ok = False
+        if not ok:
+            raise SystemExit(1)
     InitTasks().run()
 
 

@@ -32,5 +32,10 @@ case ":$PATH:" in
   *) echo "note: $BIN_DIR is not on your PATH — add it in your shell profile" ;;
 esac
 if [ ! -f "${INITTASKS_HOME:-$HOME/.config/inittasks}/config.json" ] && [ -z "${INITTASKS_TOKEN:-}" ]; then
-  echo "next: it login        # paste your itk_… token"
+  # first install: connect an account now if there's someone at the keyboard
+  if [ -t 0 ] && [ -t 1 ]; then
+    "$BIN_DIR/it" login || echo "next: it login        # paste your itk_… key"
+  else
+    echo "next: it login        # paste your itk_… key"
+  fi
 fi

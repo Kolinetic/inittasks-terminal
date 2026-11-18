@@ -123,7 +123,10 @@ def load_config() -> dict:
 
 def save_config(cfg: dict):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    # created 0600 up front so the token is never briefly readable by others
+    fd = os.open(CONFIG_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(json.dumps(cfg, indent=2))
     try:
         os.chmod(CONFIG_FILE, 0o600)
     except OSError:
@@ -135,6 +138,93 @@ def get_token() -> str:
     if not tok:
         die("no API token. Run `it login` (or set INITTASKS_TOKEN).")
     return tok.strip()
+
+
+def has_token() -> bool:
+    return bool((os.environ.get("INITTASKS_TOKEN") or load_config().get("token") or "").strip())
+
+
+def interactive() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+# What `it` and `itui` use. A key without some of these still works for the rest.
+WANTED_SCOPES = ["todos:read", "todos:write", "containers:read", "containers:write",
+                 "inbox:read", "inbox:write", "tags:read", "profiles:read"]
+
+
+def check_and_save_token(token: str) -> dict:
+    """Verify a token against GET /me, then save it. Returns /me; raises CliError if rejected."""
+    token = token.strip().strip('"').strip()
+    if not token:
+        die("no key entered")
+    if not token.startswith("itk_"):
+        print(yellow("warning: init.Tasks keys start with itk_ — trying it anyway"), file=sys.stderr)
+    prev = os.environ.get("INITTASKS_TOKEN")
+    os.environ["INITTASKS_TOKEN"] = token
+    try:
+        me = api("GET", "/me")
+    except ApiError as e:
+        die("that key was rejected" + (" (wrong or revoked key)" if e.status in (401, 403) else f": {e}"))
+    finally:
+        # only the saved config should carry the key from here on
+        if prev is None:
+            os.environ.pop("INITTASKS_TOKEN", None)
+        else:
+            os.environ["INITTASKS_TOKEN"] = prev
+    cfg = load_config()
+    cfg["token"] = token
+    save_config(cfg)
+    return me
+
+
+def setup_wizard(reason: str = "") -> bool:
+    """First-run setup: ask for a personal access token, check it, save it.
+    Returns True once a working token is saved. Needs a terminal."""
+    import getpass
+    print()
+    print(head("welcome to it") + dim(" · the init.Tasks command line"))
+    if reason:
+        print(dim(reason))
+    print()
+    print("it reaches your account with a personal access token (an api key).")
+    print("  1. in init.Tasks, open " + bold("settings → api keys") + " and create a key.")
+    print("     " + dim("give it read + write for todos, containers and inbox,"))
+    print("     " + dim("and read for tags and profiles."))
+    print("  2. copy the key (" + dim("itk_ plus 44 characters, shown only once") + ") and paste it below.")
+    print()
+    print(dim(f"the key is saved to {CONFIG_FILE}, readable only by you, and only sent to the init.Tasks API."))
+    print(dim("press enter on an empty prompt to open the web app, or ctrl-c to skip for now."))
+    failures = 0
+    while failures < 3:
+        try:
+            entered = getpass.getpass("\napi key (hidden): ")
+        except (EOFError, KeyboardInterrupt):
+            print("\n" + dim("skipped. run `it login` when you're ready."))
+            return False
+        if not entered.strip():
+            print(dim(f"opening {APP} …"))
+            try:
+                webbrowser.open(APP)
+            except Exception:
+                pass
+            continue
+        try:
+            me = check_and_save_token(entered)
+        except CliError as e:
+            failures += 1
+            print(red("✗ ") + str(e) + (", try again" if failures < 3 else ""))
+            continue
+        print(OK() + f" connected · saved to {CONFIG_FILE}")
+        missing = [s for s in WANTED_SCOPES if s not in set(me.get("scopes") or [])]
+        if missing:
+            print(yellow("note: ") + "this key is missing " + ", ".join(missing) + ".")
+            print(dim("  those parts won't work until you add them under settings → api keys → permissions."))
+        print(dim("try: it today · it inbox · itui"))
+        print()
+        return True
+    print(dim("stopping here. run `it login` to try again."))
+    return False
 
 
 # ───────────────────────────── HTTP ─────────────────────────────────────────
@@ -569,23 +659,16 @@ def view_params(args) -> dict:
 # ───────────────────────────── commands ────────────────────────────────────
 
 def cmd_login(args):
-    tok = args.token
+    token = args.token
     if args.file:
-        tok = Path(args.file).read_text(encoding="utf-8-sig")
-    if not tok:
-        import getpass
-        tok = getpass.getpass("init.Tasks API token (itk_…): ")
-    tok = tok.strip().strip('"').strip()
-    if not tok.startswith("itk_"):
-        print(yellow("warning: token doesn't start with itk_"), file=sys.stderr)
-    os.environ["INITTASKS_TOKEN"] = tok
-    try:
-        me = api("GET", "/me")
-    except ApiError as e:
-        die(f"token rejected: {e}")
-    cfg = load_config()
-    cfg["token"] = tok
-    save_config(cfg)
+        token = Path(args.file).read_text(encoding="utf-8-sig")
+    if not token:
+        if not interactive():
+            die("no key given. Use `it login KEY`, `it login -f FILE`, or run `it login` in a terminal.")
+        if not setup_wizard():
+            sys.exit(1)
+        return
+    me = check_and_save_token(token)
     print(OK() + " saved" + f" to {CONFIG_FILE}  " + dim(f"({len(me.get('scopes', []))} scopes)"))
 
 
@@ -1282,6 +1365,12 @@ def main(argv=None):
         p.print_help()
         return
     try:
+        # first run: no key yet → walk through setup, then carry on with the command
+        if args.fn not in (cmd_login, cmd_tui) and not has_token():
+            if not interactive():
+                die("no API key yet. Run `it login` in a terminal (or set INITTASKS_TOKEN).")
+            if not setup_wizard():
+                sys.exit(1)
         args.fn(args)
     except (ApiError, CliError) as e:
         print(red("error: ") + str(e), file=sys.stderr)
